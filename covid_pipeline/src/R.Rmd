@@ -1,0 +1,114 @@
+author: "H2030 Genome Center DSP/DAIP"
+output:
+  html_document: default
+  word_document: default
+header-includes: \usepackage{graphicx}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+```{r, echo=FALSE, include=FALSE}
+library(ggplot2)
+library(kableExtra)
+options(digits=11)
+```
+
+
+```{r}
+raw=read.table("summaryR4.csv",sep=",",header=T)
+frm=data.frame(raw)
+frm$sample = reorder(frm$sample,frm$coverage)
+```
+
+## General observations
+
+Total number of samples:
+```{r}
+nrow(raw)
+```
+
+```{r}
+frm %>%
+    kable() %>%
+    kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+# Read counts
+
+```{r}
+p<-ggplot(frm, aes(x=sample,y=tot_numreads,colour="Total")) +
+        geom_point(alpha=0.6) +
+        geom_point(aes(x=sample,y=tot_mapreads,colour="SARS-CoV2/Human"),alpha=0.6) +
+        geom_point(aes(x=sample,y=numreads,colour="SARS-CoV2"),alpha=0.6) +
+        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
+        xlab("Samples (ordered by increasing coverage)") +
+        ylab("Num reads")+
+        scale_colour_manual("",breaks = c("Total","SARS-CoV2/Human","SARS-CoV2"), values = c("blue","green","red"))
+print(p)
+```
+
+# Percentage of covered positions
+
+```{r}
+p<-ggplot(frm, aes(x=sample,y=coverage)) +
+        geom_point(alpha=0.6) +
+        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
+        xlab("Samples (ordered by increasing coverage)") +
+        ylab("%positions covered")+
+        ylim(0,100)
+print(p)
+```
+
+# Mean coverage depth
+
+```{r}
+p<-ggplot(frm, aes(x=sample,y=meandepth)) +
+        geom_point(alpha=0.6) +
+        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
+        xlab("Samples (ordered by increasing coverage)") +
+        ylab("Mean coverage depth")
+print(p)
+```
+
+# Percentage of positions achieving 15x coverage depth
+
+```{r}
+p<-ggplot(frm, aes(x=sample,y=perpos15x)) +
+        geom_point(alpha=0.6) +
+        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
+        xlab("Samples (ordered by increasing coverage)") +
+        ylab("%positions >= 15x")+
+        ylim(0,100)
+print(p)
+```
+
+
+# Percentage of positions achieving 50x coverage depth
+
+```{r}
+p<-ggplot(frm, aes(x=sample,y=perpos50x)) +
+        geom_point(alpha=0.6) +
+        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
+        xlab("Samples (ordered by increasing coverage)") +
+        ylab("%positions >= 50x")+
+        ylim(0,100)
+print(p)
+```
+
+
+# Percentage of positions with less than 5x coverage
+
+```{r}
+p<-ggplot(frm, aes(x=sample,y=perN5)) +
+        geom_point(alpha=0.6) +
+        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
+        xlab("Samples (ordered by increasing coverage)") +
+        ylab("%positions < 5x")+
+        ylim(0,100)
+print(p)
+```
+
