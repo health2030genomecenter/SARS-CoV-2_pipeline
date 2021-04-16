@@ -79,7 +79,7 @@ if [ "x1" == "x"$(pi_lock $jobname) ]; then
         out=sam/${sample}.sam
         jobid=$(sbatch --parsable -p normal --mem 80G --nodes 1 -n 20 -o sam_logs/${sample}.out -e sam_logs/${sample}.err --job-name $jobname --wrap="\ 
             module add UHTS/Aligner/bowtie2/2.3.4.1; \
-                bowtie2 -x ${INDEX} -1 ${samples[$(to_string $sample)]} -2 ${samples2[$(to_string $sample)]} -S $out --no-unal --sensitive")
+                bowtie2 -x ${INDEX} -1 ${samples[$(to_string $sample)]} -2 ${samples2[$(to_string $sample)]} -S $out --no-unal --sensitive --rdg 5,1.9")
         echo "... processing $sample JID=$jobid"
         echo "-1 ${samples[$(to_string $sample)]}"
         echo "-2 ${samples2[$(to_string $sample)]}"
@@ -254,11 +254,11 @@ if [ "x1" == "x"$(pi_lock $localname) ]; then
 	    echo "$l,$p"
     done >> summaryR4.csv
 
-    echo_info "PART7g - Build consensi mask for < 5x"
-    for j in `ls coverage_expanded/`; do 
-        k=${j/\.cvg/.mask}
-        cat coverage_expanded/$j | awk '{if ($2 <= 5) { print "NC_045512\t"$1+1 }}' > vcf/$k
-    done
+    #echo_info "PART7g - Build consensi mask for < 5x"
+    #for j in `ls coverage_expanded/`; do 
+    #    k=${j/\.cvg/.mask}
+    #    cat coverage_expanded/$j | awk '{if ($2 <= 5) { print "NC_045512\t"$1+1 }}' > vcf/$k
+    #done
 
     echo_info "PART7h - Coverage report"
     d=$(date)
@@ -288,6 +288,7 @@ if [ "x1" == "x"$(pi_lock $jobname) ]; then
     set_dir consensi
     for sample in "${!samples[@]}"; do
         v="vcf/${sample}.vcf"
+        c="coverage_expanded/${sample}.cvg"
         f="consensi/tmp_${sample}.fasta"
         z="vcf/${sample}.vcf.gz"
         m="vcf/${sample}.mask"
@@ -296,8 +297,7 @@ if [ "x1" == "x"$(pi_lock $jobname) ]; then
 	        bcftools norm -m -any $v | 
 		        bcftools view -i 'QUAL>650' -Oz -o $z; \
 	        bcftools index $z; \
-	        cat $SARS_REF | \
-		        bcftools consensus --mask $m $z > ${f};")
+	        zcat ${z} | $SRC_DIR/src/buildConsensus.pl -f ${SARS_REF} -c ${c} > ${f};")
     done
 fi
 pi_wait $jobname
