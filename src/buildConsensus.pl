@@ -1,28 +1,33 @@
 #!/usr/bin/env perl
 
-use constant MIN_CVG => 5;
-use constant WIDTH   => 5;
+use constant MIN_CVG     => 10;
+use constant MIN_MUT_CVG => 10;
+use constant WIDTH       => 5;
 
+use Data::Dumper;
 use Getopt::Long;
 use strict;
 
 my $ref;
 my $cov;
 my $min;
+my $min_mut;
 my ($s,$e);
 
 GetOptions(
     "f=s" => \$ref,
     "c=s" => \$cov,
     "m=i" => \$min,
+    "n=i" => \$min_mut,
     "s=i" => \$s,
     "e=i" => \$e
 );
 
 my ($id,$refseq) = read_ref($ref);
-my @ref = split //, $refseq;
-my $cov = read_cov($cov);
-my $min = MIN_CVG if (!defined($min));
+my @ref  = split //, $refseq;
+my $cov  = read_cov($cov);
+$min     = MIN_CVG if (!defined($min));
+$min_mut = MIN_MUT_CVG if (!defined($min_mut));
 
 # process vcf
 my %vcf = {};
@@ -50,7 +55,7 @@ for (my $i = 0; $i < scalar(@$cov); $i++)
         next if ($i > $e-1);
     }
 
-    if ($vcf{$i})
+    if ($vcf{$i} && $cov->[$i] >= $min_mut)
     {
         if ($vcf{$i}{mod} eq 'M')
         {
@@ -59,7 +64,7 @@ for (my $i = 0; $i < scalar(@$cov); $i++)
             my $n=0;
             foreach (@var)
             {
-                $cons .= ($cov->[$i] < $min)? 'N' : $_;
+                $cons .= $_;
                 $n++;
             }
             $i += $n-1;
@@ -87,6 +92,10 @@ for (my $i = 0; $i < scalar(@$cov); $i++)
             $i += scalar(@rm)-1;
         }
     }
+    elsif ($vcf{$i})
+    {
+        $cons .= 'N';
+    }
     else
     {
         $cons .= ($cov->[$i] < $min)? 'N' : $ref[$i];
@@ -107,7 +116,7 @@ sub read_cov
     while (<$fh>)
     {
         chomp;
-        my ($i,$c) = split /\s+/;
+        my ($unused,$i,$c) = split /\s+/;
         $cov->[$i] = $c;
     }
     close($fh);

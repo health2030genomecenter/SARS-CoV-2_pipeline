@@ -14,7 +14,8 @@ knitr::opts_chunk$set(message = FALSE)
 ```{r, echo=FALSE, include=FALSE}
 library(ggplot2)
 library(kableExtra)
-options(digits=11)
+library(ggpubr)
+library(scales)
 ```
 
 
@@ -22,6 +23,23 @@ options(digits=11)
 raw=read.table("summaryR4.csv",sep=",",header=T)
 frm=data.frame(raw)
 frm$sample = reorder(frm$sample,frm$coverage)
+frm$quality = round(frm$human_bait_reads/(frm$tot_mapreads-frm$numreads + 1), digits=2) 
+```
+
+```{r}
+frm2=frm[c("sample","tot_numreads","tot_mapreads")]
+frm2$human_on_target_reads=frm$human_bait_reads
+frm2$SARScov2_reads=frm$numreads
+frm2$SARScov2_coverage=frm$coverage
+frm2$SARScov2_meandepth=frm$meandepth
+frm2$perpos15x=frm$perpos15x
+frm2$perN5=frm$perN5
+frm2$human_on_target_proportion=frm$quality
+frm2[c("tot_numreads","tot_mapreads","human_on_target_reads","SARScov2_reads")] = frm2[c("tot_numreads","tot_mapreads","human_on_target_reads","SARScov2_reads")]/1e6
+```
+
+```{r}
+frm3=frm2[frm2$SARScov2_meandepth < 2000,]
 ```
 
 ## General observations
@@ -32,22 +50,132 @@ nrow(raw)
 ```
 
 ```{r}
-frm %>%
+frm2 %>%
     kable() %>%
     kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
 ```
 
-# Read counts
+## Samples with mean depth < 2000
+
+Total number of samples:
+```{r}
+nrow(frm3)
+```
+
+```{r}
+frm3 %>%
+    kable() %>%
+    kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+# Read counts category distribution
+
+```{r}
+quality_cutoff=0.5
+
+frm$ControlNeg=grepl("CtlNeg",frm$sample,fixed=TRUE) 
+frm$ControlPos=grepl("CtlPos",frm$sample,fixed=TRUE) 
+
+frm$control='Sample'
+noGp=nrow(frm[frm$perpos15x < 95 & frm$quality < quality_cutoff,])
+noGg=nrow(frm[frm$perpos15x < 95 & frm$quality >= quality_cutoff,])
+yesGp=nrow(frm[frm$perpos15x >= 95 & frm$quality < quality_cutoff,])
+yesGg=nrow(frm[frm$perpos15x >= 95 & frm$quality >= quality_cutoff,])
+neg=nrow(frm[frm$ControlNeg,])
+pos=nrow(frm[frm$ControlPos,])
+p15plus=nrow(frm[frm$perpos15x >=95,])
+p15minus=nrow(frm[frm$perpos15x < 95,])
+
+frm$quadrant=0
+if (yesGg>0) {
+    frm[frm$perpos15x >= 95 & frm$quality >= quality_cutoff,]$quadrant=paste(yesGg,"pass GISAID / good quality",sep=" ")
+}
+if (yesGp>0) {
+    frm[frm$perpos15x >= 95 & frm$quality < quality_cutoff,]$quadrant=paste(yesGp,"pass GISAID / poor quality",sep=" ")
+}
+if (noGg>0) {
+    frm[frm$perpos15x < 95 & frm$quality >= quality_cutoff,]$quadrant=paste(noGg,"not passing GISAID / good quality",sep=" ")
+}
+if (noGp>0) {
+    frm[frm$perpos15x < 95 & frm$quality < quality_cutoff,]$quadrant=paste(noGp,"not passing GISAID / poor quality",sep=" ")
+}
+if (pos>0) {
+      frm[frm$ControlPos,]$quadrant=paste(pos, "positive controls", sep=" ")
+}
+if (neg>0) {
+      frm[frm$ControlNeg,]$quadrant=paste(neg, "negative controls", sep=" ")
+}
+```
+
+#### Number of SARS-CoV-2 reads in respect to proportion of human reads on target
+
+```{r}
+p<-ggplot(frm, aes(x=quality,y=numreads,colour=quadrant)) +
+    geom_point(aes(shape=quadrant),alpha=0.8) +
+    theme() +
+    xlab("Proportion of human reads on target") +
+    ylab("SARS-CoV-2 reads") +
+    scale_shape_manual(values=c(1,8,3,17,24,9)) +
+    scale_color_manual(values=c("green", "red", "blue","orange","brown","black")) +
+    scale_y_continuous(trans=scales::pseudo_log_trans(base = 10),breaks = c(0,10,100,1000,10000,100000,1000000,10000000,100000000), labels = trans_format("log10", math_format(10^.x))) +
+    xlim(0,1)
+p<-p+theme_bw()
+p<-p+theme(legend.title = element_blank())
+print(p)
+```
+
+#### Number of SARS-CoV-2 reads in respect to number of human reads on target
+
+
+```{r}
+p<-ggplot(frm, aes(x=human_bait_reads,y=numreads,colour=quadrant)) +
+    geom_point(aes(shape=quadrant),alpha=0.8) +
+    theme() +
+    xlab("Human reads on target") +
+    ylab("SARS-CoV-2 reads") +
+    scale_shape_manual(values=c(1,8,3,17,24,9)) +
+    scale_color_manual(values=c("green", "red", "blue","orange","brown","black")) +
+    scale_x_continuous(trans=scales::pseudo_log_trans(base = 10),breaks = c(0,10,100,1000,10000,100000,1000000,10000000,100000000), labels = trans_format("log10", math_format(10^.x))) +
+    scale_y_continuous(trans=scales::pseudo_log_trans(base = 10),breaks = c(0,10,100,1000,10000,100000,1000000,10000000,100000000), labels = trans_format("log10", math_format(10^.x)))
+p<-p+theme_bw()
+p<-p+theme(legend.title = element_blank())
+print(p)
+```
+
+```{r}
+p<-ggplot(frm, aes(x=human_bait_reads,y=numreads,colour=quadrant)) +
+    geom_point(aes(shape=quadrant),alpha=0.5) +
+    theme() +
+    xlab("Human reads on target") +
+    ylab("SARS-CoV-2 reads") +
+    scale_shape_manual(values=c(1,8,3,17,24,9)) +
+    scale_color_manual(values=c("green", "red", "blue","orange","brown","black")) +
+    scale_x_continuous(trans=scales::pseudo_log_trans(base = 10),breaks = c(0,10,100,1000,10000,100000,1000000,10000000,100000000), labels = trans_format("log10", math_format(10^.x))) +
+    scale_y_continuous(trans=scales::pseudo_log_trans(base = 10),breaks = c(0,10,100,1000,10000,100000,1000000,10000000,100000000), labels = trans_format("log10", math_format(10^.x))) +
+    facet_wrap("quadrant",ncol=2) +
+    theme(legend.position = "none")
+
+p<-p+theme_bw()
+p<-p+theme(legend.title = element_blank())
+print(p)
+```
+
+
+# Number of reads
 
 ```{r}
 p<-ggplot(frm, aes(x=sample,y=tot_numreads,colour="Total")) +
         geom_point(alpha=0.6) +
-        geom_point(aes(x=sample,y=tot_mapreads,colour="SARS-CoV2/Human"),alpha=0.6) +
+        geom_point(aes(x=sample,y=tot_mapreads,colour="Mapped"),alpha=0.6) +
         geom_point(aes(x=sample,y=numreads,colour="SARS-CoV2"),alpha=0.6) +
-        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
+        geom_point(aes(x=sample,y=human_bait_reads,colour="Human baits"),alpha=0.6) +
         xlab("Samples (ordered by increasing coverage)") +
         ylab("Num reads")+
-        scale_colour_manual("",breaks = c("Total","SARS-CoV2/Human","SARS-CoV2"), values = c("blue","green","red"))
+        scale_colour_manual("",breaks = c("Total","Mapped","SARS-CoV2","Human baits"), values = c("blue","green","red","yellow"))
+
+p<-p+theme_bw()
+p<-p+theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+p<-p+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank())
 print(p)
 ```
 
@@ -60,6 +188,10 @@ p<-ggplot(frm, aes(x=sample,y=coverage)) +
         xlab("Samples (ordered by increasing coverage)") +
         ylab("%positions covered")+
         ylim(0,100)
+
+p<-p+theme_bw()
+p<-p+theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+p<-p+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank())
 print(p)
 ```
 
@@ -71,6 +203,10 @@ p<-ggplot(frm, aes(x=sample,y=meandepth)) +
         theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
         xlab("Samples (ordered by increasing coverage)") +
         ylab("Mean coverage depth")
+
+p<-p+theme_bw()
+p<-p+theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+p<-p+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank())
 print(p)
 ```
 
@@ -79,10 +215,12 @@ print(p)
 ```{r}
 p<-ggplot(frm, aes(x=sample,y=perpos15x)) +
         geom_point(alpha=0.6) +
-        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
         xlab("Samples (ordered by increasing coverage)") +
         ylab("%positions >= 15x")+
         ylim(0,100)
+p<-p+theme_bw()
+p<-p+theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+p<-p+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank())
 print(p)
 ```
 
@@ -92,10 +230,12 @@ print(p)
 ```{r}
 p<-ggplot(frm, aes(x=sample,y=perpos50x)) +
         geom_point(alpha=0.6) +
-        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
         xlab("Samples (ordered by increasing coverage)") +
         ylab("%positions >= 50x")+
         ylim(0,100)
+p<-p+theme_bw()
+p<-p+theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+p<-p+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank())
 print(p)
 ```
 
@@ -105,10 +245,27 @@ print(p)
 ```{r}
 p<-ggplot(frm, aes(x=sample,y=perN5)) +
         geom_point(alpha=0.6) +
-        theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())+
         xlab("Samples (ordered by increasing coverage)") +
         ylab("%positions < 5x")+
         ylim(0,100)
+p<-p+theme_bw()
+p<-p+theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+p<-p+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank())
 print(p)
 ```
+
+# Number of human reads on target
+
+```{r}
+p<-ggplot(frm, aes(x=sample,y=quality)) +
+        geom_point(alpha=0.6) +
+        xlab("Samples (ordered by increasing SARS-CoV-2 coverage)") +
+        ylab("Number of human reads on target")+
+        ylim(0,1)
+p<-p+theme_bw()
+p<-p+theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+p<-p+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank())
+print(p)
+```
+
 

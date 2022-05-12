@@ -1,6 +1,8 @@
 #!/bin/env bash
 
-source /data/UHTS/2backup/tools/covid_pipeline/covpi.conf
+PARTITION=normal #queue10A|queue10B|normal
+EXEC_DIR=/data/UHTS/2backup/tools/SARS-CoV-2_pipeline/curr
+source ${EXEC_DIR}/covpipe.conf
 source ${SRC_DIR}/src/utils.sh
 uid=$(uid_gen)
 
@@ -15,17 +17,19 @@ fi
 ###############################################################
 # SETUP WORKING DIR
 ###############################################################
-mkdir -p ${OUT_DIR}
+mkdir -p ${PRJ_DIR}
+ln -s ${PRJ_DIR} ${OUT_DIR}
 cd ${OUT_DIR}
+echo $VERSION > VERSION
 
 ###############################################################
-# BUILD INDEX IF REQUESTED
+# BUILD BOWTIE2 INDEX IF REQUESTED
 #############################################################
 if [ "x1" == "x$BUILD_INDEX" ]; then
     mkdir -p $INDEX
-    module add UHTS/Aligner/bowtie2/2.3.4.1
+    module add $BOWTIE
     bowtie2-build $REF $INDEX
-    module remove UHTS/Aligner/bowtie2/2.3.4.1
+    module remove $BOWTIE
 fi
 
 
@@ -51,9 +55,9 @@ for run_lane in ${runs_lanes}; do
             # Collect R1s
             for j in `ls ${run}/demult1/part$((lane-1))/${PROJECT}/${a}_null_*_L00${lane}_R1_*.fastq.gz`; do
                 if [ "x"${samples[$(to_string $a)]} != "x" ]; then
-                    samples[$(to_string $a)]=${samples[$(to_string $a)]}",$j"
+                    samples[$(to_string $a)]=${samples[$(to_string $a)]}",$j" # concatenate file names
                 else
-                    samples[$(to_string $a)]=$j
+                    samples[$(to_string $a)]=$j # first file name
                 fi
             done
             # Collect R2s
@@ -68,18 +72,20 @@ for run_lane in ${runs_lanes}; do
     done
 done
 
+
 ###############################################################
 # MAPPING
 ###############################################################
 echo_info "PART1 - Mapping of reads to reference"
+samdir=sam
 jobname=part1_mapping.$uid
 if [ "x1" == "x"$(pi_lock $jobname) ]; then
-    set_dir sam
+    set_dir ${samdir}
     for sample in "${!samples[@]}"; do
-        out=sam/${sample}.sam
-        jobid=$(sbatch --parsable -p normal --mem 80G --nodes 1 -n 20 -o sam_logs/${sample}.out -e sam_logs/${sample}.err --job-name $jobname --wrap="\ 
-            module add UHTS/Aligner/bowtie2/2.3.4.1; \
-                bowtie2 -x ${INDEX} -1 ${samples[$(to_string $sample)]} -2 ${samples2[$(to_string $sample)]} -S $out --no-unal --sensitive --rdg 5,1.9")
+        out=${samdir}/${sample}.sam
+        jobid=$(sbatch --parsable -p ${PARTITION} --mem 80G --nodes 1 -n 20 -o sam_logs/${sample}.out -e sam_logs/${sample}.err --job-name $jobname --wrap="\ 
+            module add $BOWTIE; \
+                bowtie2 -x ${INDEX} -1 ${samples[$(to_string $sample)]} -2 ${samples2[$(to_string $sample)]} -S $out -p ${THREADS} --no-mixed --no-unal --no-discordant --sensitive --rdg 5,1.9")
         echo "... processing $sample JID=$jobid"
         echo "-1 ${samples[$(to_string $sample)]}"
         echo "-2 ${samples2[$(to_string $sample)]}"
@@ -92,17 +98,19 @@ pi_wait $jobname
 ############################################################### 
 echo_info "PART2 - Sort and index BAMs"
 jobname=part2_bamSorting.$uid
+bamdir=bam
 if [ "x1" == "x"$(pi_lock $jobname) ]; then
     set_dir bam
     for sample in "${!samples[@]}"; do
-	    s="sam/${sample}.sam"
-	    b="bam/${sample}.bam"
-        c="bam/${sample}"
-	    jobid=$(sbatch --parsable -p normal --mem 80G --nodes 1 -n 20 -o bam_logs/${sample}.out -e bam_logs/${sample}.err --job-name $jobname --wrap="\
-            module add samtools; \
-            samtools fixmate -r -m ${s} ${c}.fm.bam; \ 
-            samtools sort ${c}.fm.bam -O BAM -o ${b}; \
-            samtools index ${b} > ${b}.bai")
+        s="${samdir}/${sample}.sam"
+        b="${bamdir}/${sample}.bam"
+        c="${bamdir}/${sample}"
+        jobid=$(sbatch --parsable -p ${PARTITION} --mem 80G --nodes 1 -n 20 -o bam_logs/${sample}.out -e bam_logs/${sample}.err --job-name $jobname --wrap="\
+            module add $SAMTOOLS; \
+            samtools ampliconclip -@ ${THREADS} --hard-clip -u -b ${PRIMERS_BED} -o ${c}.cl.bam ${s}; \ 
+            samtools fixmate -@ ${THREADS} -r -m ${c}.cl.bam ${c}.fm.bam; \ 
+            samtools sort ${c}.fm.bam -@ ${THREADS} -O BAM -o ${b}; \
+            samtools index -@ ${THREADS} ${b} > ${b}.bai")
         echo "... processing $sample JID=$jobid"
     done 
 fi
@@ -114,13 +122,13 @@ pi_wait $jobname;
 echo_info "PART3 - Extract coverage"
 jobname=part3_coverage.$uid
 if [ "x1" == "x"$(pi_lock $jobname) ]; then
-    set_dir coverage
+    set_dir coverage_expanded
     for sample in "${!samples[@]}"; do
-	    b="bam/${sample}.bam"
-	    k="coverage/${sample}.cvg"
-        jobid=$(sbatch --parsable -p normal --mem 80G --nodes 1 -n 20 -o coverage_logs/${sample}.out -e coverage_logs/${sample}.err --job-name $jobname --wrap="\
-		    module add UHTS/Analysis/BEDTools/2.26.0; \
-		    bedtools genomecov -ibam $b -bga > $k")
+	    b="${bamdir}/${sample}.bam"
+	    k="coverage_expanded/${sample}.cvg"
+        jobid=$(sbatch --parsable -p ${PARTITION} --mem 80G --nodes 1 -n 20 -o coverage_expanded_logs/${sample}.out -e coverage_expanded_logs/${sample}.err --job-name $jobname --wrap="\
+		    module add $SAMTOOLS; \
+		    samtools depth -J -a -r NC_045512:1-29903 $b > $k")
         echo "... processing $sample JID=$jobid"
     done	
 fi
@@ -135,37 +143,20 @@ jobname=part4_coverageSummary.$uid
 if [ "x1" == "x"$(pi_lock $jobname) ]; then
     set_dir coverage_summary
     for sample in "${!samples[@]}"; do
-	    b="bam/${sample}.bam"
+	    b="${bamdir}/${sample}.bam"
 	    k="coverage_summary/${sample}.txt"
-	    jobid=$(sbatch --parsable -p normal --mem 80G --nodes 1 -n 20 -o coverage_summary_logs/${sample}.out -e coverage_summary_logs/${sample}.err --job-name $jobname --wrap="\
-		    module add samtools; \
+	    jobid=$(sbatch --parsable -p ${PARTITION} --mem 80G --nodes 1 -n 20 -o coverage_summary_logs/${sample}.out -e coverage_summary_logs/${sample}.err --job-name $jobname --wrap="\
+		    module add $SAMTOOLS; \
 		    samtools coverage -r NC_045512:1-29903 $b > $k")
         echo "... processing $k JID=$jobid"
     done
 fi
-#pi_wait $jobname -> POSTPONE AS NEXT JOB CAN START NOW
-
-
-###############################################################
-# CALCULATE EXPANDED COVERAGE
-############################################################### 
-echo_info "PART5 - Expand coverage"
-localname=part5_coverageExpand.$uid
-if [ "x1" == "x"$(pi_lock $localname) ]; then
-    set_dir coverage_expanded
-    for sample in "${!samples[@]}"; do
-        echo "$sample"
-        cat coverage/${sample}.cvg | grep NC_045512 | perl -ne 'chomp; @v=split/\s+/; for($i=$v[1];$i<$v[2];$i++) { print "$i\t$v[3]\n"; }' \
-	    > coverage_expanded/${sample}.cvg 
-    done
-fi              
-pi_unlock $localname
-
-###############################################################
-# WAIT COVERAGE SUMMARY TERMINATION
-###############################################################
 pi_wait $jobname # wait COVERAGE SUMMARY step4
 
+###############################################################
+# CALCULATE COVERAGE EXPANDED REMOVED (Part5) AS DONE IN Part3
+############################################################### 
+echo_info "PART5 - Expand coverage (REMOVED)"
 
 ###############################################################
 #  BUILD VCF (start it now as it is time consuming)
@@ -175,11 +166,11 @@ jobname=part6_variantMap.$uid
 if [ "x1" == "x"$(pi_lock $jobname) ]; then
     set_dir vcf
     for sample in "${!samples[@]}"; do
-        b="bam/${sample}.bam"
+        b="${bamdir}/${sample}.bam"
         v="vcf/${sample}.vcf"
-        jobid=$(sbatch --parsable -p normal --mem 80G --nodes 1 -n 20 -o vcf_logs/${sample}.out -e vcf_logs/${sample}.err --job-name $jobname --wrap="\
-	        module add UHTS/Analysis/freebayes/1.2.0; \
-	        freebayes -p 1 --region NC_045512:1..29903 -f $REF $b > $v;")
+        jobid=$(sbatch --parsable -p ${PARTITION} --mem 80G --nodes 1 -n 20 -o vcf_logs/${sample}.out -e vcf_logs/${sample}.err --job-name $jobname --wrap="\
+	        module add $FREEBAYES; \
+	        freebayes -p 1 -j --region NC_045512:1..29903 -f $REF $b > $v;")
         echo "... processing $x JID=$jobid"
     done
 fi
@@ -197,27 +188,34 @@ if [ "x1" == "x"$(pi_lock $localname) ]; then
         runName=$(echo ${run_lane} | cut -d ':' -f 1)
         stat_json="${stat_json} ${RUN_DIR}/${runName}/demult1/Stats.json"
     done
-    /bin/sh -c "$SRC_DIR/src/get_tot_reads.pl $stat_json > counts.csv"
+    $SRC_DIR/src/get_tot_reads.pl $stat_json > counts.csv
 
     echo_info "PART7b - Counts from BAMs"
-    module add samtools
+    module add $SAMTOOLS
     cat counts.csv | while read i; do
 	    a=$(echo $i | cut -d ',' -f 1 | sed 's/_null_Capt.*$//')
 	    n=$(echo $i | cut -d ',' -f 2)
         if [[ "x" != "x"${samples[$(to_string $a)]} ]]; then
-            if [ -f bam/${a}.bam ]; then 
-		        c=$(samtools view -@ 8 -c bam/${a}.bam)
-		        echo "$a,$n,$c"
+            if [ -f ${bamdir}/${a}.bam ]; then 
+		        h=0
+                while read j; do
+                    t=0
+                    t=$(samtools stats bam/${a}.bam ${j} | grep 'reads mapped:' | awk '{print $4}')
+                    h=$((h+t))
+                done <<< $(cat ${HUMAN_COORDINATES})              
+                
+                c=$(samtools view -@ 8 -c ${bamdir}/${a}.bam)
+		        echo "$a,$n,$c,$h"
             else
-                echo >&2 "ERROR missing bam/${a}.bam file"
+                echo >&2 "ERROR missing ${bamdir}/${a}.bam file"
                 exit 2
             fi
         fi
     done > counts2.csv
-    module remove samtools
+    module remove $SAMTOOLS
 
     echo_info "PART7c - Build summary table"
-    echo 'sample,tot_numreads,tot_mapreads,refname,startpos,endpos,numreads,covbases,coverage,meandepth,meanbaseq,meanmapq' > summaryR.csv
+    echo 'sample,tot_numreads,tot_mapreads,human_bait_reads,refname,startpos,endpos,numreads,covbases,coverage,meandepth,meanbaseq,meanmapq' > summaryR.csv
     cat counts2.csv | while read l; do 
 	    n=$(echo $l | cut -d ',' -f 1)
 	    c=$(tail -1 coverage_summary/${n}.txt)
@@ -226,30 +224,30 @@ if [ "x1" == "x"$(pi_lock $localname) ]; then
 
     echo_info "PART7d - Build summary table with >= 15x"
     export CVG=15
-    echo 'sample,tot_numreads,tot_mapreads,refname,startpos,endpos,numreads,covbases,coverage,meandepth,meanbaseq,meanmapq,numpos15x,perpos15x' > summaryR2.csv
+    echo 'sample,tot_numreads,tot_mapreads,human_bait_reads,refname,startpos,endpos,numreads,covbases,coverage,meandepth,meanbaseq,meanmapq,numpos15x,perpos15x' > summaryR2.csv
     cat summaryR.csv | grep -v 'sample' | while read l; do 
-	    name=$(echo $l | cut -d ',' -f 1)
-	    n=$(cat coverage_expanded/${name}.cvg | awk -v x=$CVG '{if ($2 >= x) {print}}' | wc -l)
+        name=$(echo $l | cut -d ',' -f 1)
+	    n=$(cat coverage_expanded/${name}.cvg | awk -v x=$CVG '{if ($3 >= x) {print}}' | wc -l)
 	    p=$(echo "scale=2;100*$n/29903" | bc)
 	    echo "$l,$n,$p"
     done >> summaryR2.csv
 
     echo_info "PART7e - Build summary table with >= 50x"
     export CVG=50
-    echo 'sample,tot_numreads,tot_mapreads,refname,startpos,endpos,numreads,covbases,coverage,meandepth,meanbaseq,meanmapq,numpos15x,perpos15x,numpos50x,perpos50x' > summaryR3.csv
+    echo 'sample,tot_numreads,tot_mapreads,human_bait_reads,refname,startpos,endpos,numreads,covbases,coverage,meandepth,meanbaseq,meanmapq,numpos15x,perpos15x,numpos50x,perpos50x' > summaryR3.csv
     cat summaryR2.csv | grep -v 'sample' | while read l; do 
 	    name=$(echo $l | cut -d ',' -f 1)
-	    n=$(cat coverage_expanded/${name}.cvg |  awk -v x=$CVG '{if ($2 >= x) {print}}' | wc -l)
+	    n=$(cat coverage_expanded/${name}.cvg |  awk -v x=$CVG '{if ($3 >= x) {print}}' | wc -l)
 	    p=$(echo "scale=2;100*$n/29903" | bc)
 	    echo "$l,$n,$p"
     done >> summaryR3.csv
 
     echo_info "PART7f - Build summary table with < 5x"
     export CVG=5
-    echo 'sample,tot_numreads,tot_mapreads,refname,startpos,endpos,numreads,covbases,coverage,meandepth,meanbaseq,meanmapq,numpos15x,perpos15x,numpos50x,perpos50x,perN5' > summaryR4.csv
+    echo 'sample,tot_numreads,tot_mapreads,human_bait_reads,refname,startpos,endpos,numreads,covbases,coverage,meandepth,meanbaseq,meanmapq,numpos15x,perpos15x,numpos50x,perpos50x,perN5' > summaryR4.csv
     cat summaryR3.csv | grep -v 'sample' | while read l; do
 	    name=$(echo $l | cut -d ',' -f 1)
-	    n=$(cat coverage_expanded/${name}.cvg | awk -v x=$CVG '{if ($2 < x) {print}}' | wc -l)
+	    n=$(cat coverage_expanded/${name}.cvg | awk -v x=$CVG '{if ($3 < x) {print}}' | wc -l)
 	    p=$(echo "scale=2;100*$n/29903" | bc)
 	    echo "$l,$p"
     done >> summaryR4.csv
@@ -266,13 +264,15 @@ if [ "x1" == "x"$(pi_lock $localname) ]; then
     echo "title: \"$PROJECT\"" >> R.Rmd
     echo "date: \"$d\"" >> R.Rmd
     cat ${SRC_DIR}/src/R.Rmd >> R.Rmd 
-    module add R/latest
+    #module add R/latest
+    module add $R_PACKAGE
     Rscript -e "rmarkdown::render('R.Rmd')"
-    module remove R/latest
+    module remove $R_PACKAGE 
     mv -v R.html ${PROJECT}.html
 fi
 pi_unlock $localname
-    
+   
+
 ###############################################################
 # Wait for VCF generation terminates
 ###############################################################
@@ -292,15 +292,17 @@ if [ "x1" == "x"$(pi_lock $jobname) ]; then
         f="consensi/tmp_${sample}.fasta"
         z="vcf/${sample}.vcf.gz"
         m="vcf/${sample}.mask"
-        jobid=$(sbatch --parsable -p normal --mem 80G --nodes 1 -n 20 -o consensi_logs/${sample}.out -e consensi_logs/${sample}.err --job-name $jobname --wrap="\
-	        module add UHTS/Samtools/1.10; \
-	        bcftools norm -m -any $v | 
-		        bcftools view -i 'QUAL>650' -Oz -o $z; \
-	        bcftools index $z; \
-	        zcat ${z} | $SRC_DIR/src/buildConsensus.pl -f ${SARS_REF} -c ${c} > ${f};")
+        jobid=$(sbatch --parsable -p ${PARTITION} --mem 80G --nodes 1 -n 20 -o consensi_logs/${sample}.out -e consensi_logs/${sample}.err --job-name $jobname --wrap="\
+	        module add $BCFTOOLS; \
+	        bcftools norm --threads ${THREADS} -m -any $v | 
+            bcftools view --threads ${THREADS} -i 'QUAL > 650 || (QUAL > 1 && QUAL / INFO/AO > 6 && (GL[-:1] - GL[-:0]) > 10 )' -Oz -o $z; \
+	        bcftools index --threads ${THREADS} $z; \
+	        zcat ${z} | $SRC_DIR/src/buildConsensus.pl -m $MIN_CVG -f ${SARS_REF} -c ${c} > ${f};")
     done
 fi
 pi_wait $jobname
+            
+#bcftools view --threads ${THREADS} -i 'QUAL > 650 || (QUAL > 1 && QUAL / INFO/AO > 10 && DP > 5 && SAF > 0 && SAR > 0 && (GL[-:1] - GL[-:0]) > 10 )' -Oz -o $z; \
 
 
 ###############################################################
@@ -317,11 +319,11 @@ if [ "x1" == "x"$(pi_lock $localname) ]; then
 
     echo_info "PART9b - Select consensi where 95% > 15x"
     set_dir consensi_gisaid_ok
-    cat summaryR4.csv  | awk -F ',' '{if ($14 >= 95) { print $1 }}'  | grep -v sample | while read l; do cp -v consensi/${l}.fasta consensi_gisaid_ok/; done
+    cat summaryR4.csv  | awk -F ',' '{if ($15 >= 95) { print $1 }}'  | grep -v sample | while read l; do cp -v consensi/${l}.fasta consensi_gisaid_ok/; done
 
     echo_info "PART9c - Select consensi where 95% > 15x is not reached"
     set_dir consensi_gisaid_not_ok
-    cat summaryR4.csv  | awk -F ',' '{if ($14 < 95) { print $1 }}'  | grep -v sample | while read l; do cp -v consensi/${l}.fasta consensi_gisaid_not_ok/; done
+    cat summaryR4.csv  | awk -F ',' '{if ($15 < 95) { print $1 }}'  | grep -v sample | while read l; do cp -v consensi/${l}.fasta consensi_gisaid_not_ok/; done
 fi
 pi_unlock $localname
 
@@ -333,13 +335,13 @@ echo_info "PART10 - Variants post-processing"
 localname=part10_variantsPostprocessing.$uid
 if [ "x1" == "x"$(pi_lock $localname) ]; then
     echo_info "PART10a - Collect mutations"
-    module add UHTS/Samtools/1.10
+    module add $BCFTOOLS
     for sample in "${!samples[@]}"; do
 	    bcftools view vcf/${sample}.vcf.gz | ${SRC_DIR}/src/vcf2tbl.pl -n $sample
     done > vcf.csv
-    module remove UHTS/Samtools/1.10
+    module remove $SAMTOOLS
 
     echo_info "PART10b - Variant of concern attribution"
-    cat vcf.csv | ${SRC_DIR}/src/annvar.pl -c 0.6 -d coverage_expanded/ -v $VARIANT_ANNOTATION  2>variant_attribution.log > variant_attribution.csv
+    cat vcf.csv | ${SRC_DIR}/src/annvar.pl -m $MIN_CVG -c 0.6 -d coverage_expanded/ -v $VARIANT_ANNOTATION  2>variant_attribution.log > variant_attribution.csv
 fi
 pi_unlock $localname

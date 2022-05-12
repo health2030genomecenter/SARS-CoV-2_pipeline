@@ -36,7 +36,7 @@ pi_unlock () {
 
 pi_wait () {
     trap "notify_term $1" 1 2 3 8 9 14 15
-    sleep 2 # remember there are latencies with filesystems
+    sleep 10 # remember there are latencies with filesystems
     if [ -e ${1}.lock ]; then
         # ensure the job started before the real waiting
         if [ "x0" == "x"$(head -1 ${1}.lock) ]; then
